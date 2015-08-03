@@ -36,6 +36,7 @@ namespace IISLogAnalytics
                 Console.WriteLine ("Filter for pattern: -include <comma seperated list of file extn>");
                 Console.WriteLine ("Concurrency Window in mimutes : -concurrency <No of minutes>");
                 Console.WriteLine ("No of Top Pages/day  : -toppages <No of pages>");
+                Console.WriteLine ("No of Peak Hours to consider:  -peaks <No of peaks>");
                 Console.WriteLine ("Summarize of specific URL parameters:  -param <comma seperated list of patterns>");
                 return;
             }
@@ -445,21 +446,21 @@ namespace IISLogAnalytics
 
                 startRow = startCol = 1;
 
-                CollectionToTable (pageViewsForPeriod, startRow, startCol, "Page visit Summary (for the period)");
+                startRow = CollectionToTable (pageViewsForPeriod, startRow, startCol, "Page visit Summary (for the period)");
 
 
                 reportSheet.Shapes.AddChart (XlChartType.xlLine).Select ();
-                excelApp.ActiveChart.SetSourceData (Source: reportSheet.get_Range ("A1:B" + reportRow));
+                excelApp.ActiveChart.SetSourceData (Source: reportSheet.get_Range ("A1:B" + startRow));
 
                 reportSheet.Shapes.AddChart (XlChartType.xlPie).Select ();
-                excelApp.ActiveChart.SetSourceData (Source: reportSheet.get_Range ("A1:B" + reportRow));
+                excelApp.ActiveChart.SetSourceData (Source: reportSheet.get_Range ("A1:B" + startRow));
                 excelApp.ActiveChart.ClearToMatchStyle ();
                 excelApp.ActiveChart.ChartStyle = 256;
                 excelApp.ActiveChart.SetElement (Microsoft.Office.Core.MsoChartElementType.msoElementChartTitleAboveChart);
                 excelApp.ActiveChart.ChartTitle.Text = "Page visit Summary (for the period) Most Visited Pages";
 
                 reportSheet.Shapes.AddChart (XlChartType.xlBarClustered).Select ();
-                excelApp.ActiveChart.SetSourceData (Source: reportSheet.get_Range ("A1:D" + reportRow));
+                excelApp.ActiveChart.SetSourceData (Source: reportSheet.get_Range ("A1:D" + startRow));
                 excelApp.ActiveChart.ClearToMatchStyle ();
                 excelApp.ActiveChart.ChartStyle = 222;
                 excelApp.ActiveChart.SetElement (Microsoft.Office.Core.MsoChartElementType.msoElementChartTitleAboveChart);
@@ -545,7 +546,6 @@ namespace IISLogAnalytics
                 startRow += AddChartFromSeries (startRow, startCol, "Hourly Top Pages Summary (By Hits)", topPages, p => p.Hits, d => d.ToString ());
                 excelApp.ActiveChart.Axes (XlAxisType.xlCategory).CategoryType = XlCategoryType.xlCategoryScale;
 
-                //var hourlyHits = hourlyPages.GroupBy (p => p.Timestamp, q => new { TimeStamp = q.Timestamp, Hits = q.Hits });
                 var hourlyHits = hourlyPages.GroupBy (p => p.Timestamp, q => q);
                 var peakHits = hourlyHits.Select (p => p.Sum (q => q.Hits)).OrderByDescending (p => p).Take (peakHoursCount).Min ();
                 var peakHourPages = hourlyHits.Where (p => p.Sum (q => q.Hits) >= peakHits).SelectMany (g => g.Where (p => p.Hits > peakHits * 2 / 100));
