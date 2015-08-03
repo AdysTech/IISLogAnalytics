@@ -1,5 +1,5 @@
 # IISLogAnalytics
-A small console application to parse IIS logs for a period and generate analytics like page view trend, peak hour trend etc.
+A small console application to parse IIS logs for a period and generate a MS Excel spreadsheet with analytics like page view trend, peak hour trend etc.
 
 This console application parses multiple IIS log files (many days, hours), and analysis them, and generates analytics. Currently implemented are:
 
@@ -16,3 +16,5 @@ The concurrency window is configurable.
 5. URL parameters, if pages have a specifiec query parameter, that needs to be analyzed.
 
 6. Generic statistics, like total requests by various HTTP codes etc.
+
+Pre-Req: needs office 2010+, reference: Microsoft.Office.Interop.Excel 14.0.0.0, office 14.0.0.0
