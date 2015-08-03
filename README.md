@@ -8,8 +8,10 @@ The concurrency window is configurable.
 
 2. Page visit Summary, it tracks all pages visited, and their 
     Total Hits, response time metrics(Min(sec), Avg(sec), Max(sec), 90th-%(sec), Median(sec), Std. Deviation(sec)), and graphs.
-  
+<img src="IISLogAnalytics/Sample Graphs/Top Pages.png"/>
+
 3. Daily summary, Top Pages - Visits Trend, Response Time(90%tile) Trend
+<img src="IISLogAnalytics/Sample Graphs/Daily graphs.png"/>
 
 4. Hourly Analysis, Top Pages (so you can see which pages overlap over time), peak hour pages.
 
