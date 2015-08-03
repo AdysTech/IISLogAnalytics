@@ -1,4 +1,6 @@
-﻿using Microsoft.Office.Interop;
+﻿//Copyright: Adarsha @ AdysTech.com
+
+using Microsoft.Office.Interop;
 using Microsoft.Office.Interop.Excel;
 using System;
 using System.Collections.Generic;
@@ -9,7 +11,7 @@ using System.Text;
 using System.Text.RegularExpressions;
 using System.Threading.Tasks;
 
-namespace IISLogAnalytics
+namespace AdysTech.IISLogAnalytics
 {
     class Program
     {

@@ -4,8 +4,9 @@ using System.Linq;
 using System.Text;
 using System.Threading.Tasks;
 
-namespace IISLogAnalytics
+namespace AdysTech.IISLogAnalytics
 {
+    //ref://https://www.microsoft.com/technet/prodtechnol/WindowsServer2003/Library/IIS/676400bc-8969-4aa7-851a-9319490a9bbb.mspx?mfr=true
     class IISLogEntry
     {
        public static readonly string propClientIPAddress = "c-ip";

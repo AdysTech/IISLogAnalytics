@@ -5,11 +5,11 @@ using System.Runtime.InteropServices;
 // General Information about an assembly is controlled through the following 
 // set of attributes. Change these attribute values to modify the information
 // associated with an assembly.
-[assembly: AssemblyTitle ("IISLogAnalytics")]
-[assembly: AssemblyDescription ("")]
+[assembly: AssemblyTitle ("AdysTech.IISLogAnalytics")]
+[assembly: AssemblyDescription ("Generates Analytucs form IIS logs")]
 [assembly: AssemblyConfiguration ("")]
-[assembly: AssemblyCompany ("")]
-[assembly: AssemblyProduct ("IISLogAnalytics")]
+[assembly: AssemblyCompany ("Adys Tech")]
+[assembly: AssemblyProduct ("AdysTech.IISLogAnalytics")]
 [assembly: AssemblyCopyright ("Copyright ©  2015")]
 [assembly: AssemblyTrademark ("")]
 [assembly: AssemblyCulture ("")]
