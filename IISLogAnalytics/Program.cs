@@ -360,13 +360,13 @@ namespace AdysTech.IISLogAnalytics
                 Console.WriteLine ("\nProcessed {0} entries", TotalHits);
                 #endregion
 
-                excelApp = new Application ();
+                excelApp = new Application();
                 excelApp.Visible = false;
-                reportSpreadsheet = excelApp.Workbooks.Add ();
+                reportSpreadsheet = excelApp.Workbooks.Add();
                 excelApp.Calculation = XlCalculation.xlCalculationManual;
                 reportSheet = reportSpreadsheet.ActiveSheet;
 
-                Console.WriteLine ("Calculating Concurrent User Count");
+                Console.WriteLine("Calculating Concurrent User Count");
                 #region Concurrent Users
                 reportSheet.Name = "Concurrent Users";
                 reportSheet.Cells[reportRow, reportCol++] = "Timestamp";
@@ -377,10 +377,10 @@ namespace AdysTech.IISLogAnalytics
                 reportSheet.Cells[reportRow, reportCol++] = "Bytes Sent";
                 reportSheet.Cells[reportRow, reportCol++] = "Network Speed (Mbps)";
 
-                reportRow++;
-                foreach ( var p in requests )
+
+                foreach (var p in requests)
                 {
-                    reportCol = 1;
+                    reportCol = 1; reportRow++;
                     reportSheet.Cells[reportRow, reportCol++] = p.TimeStamp;
                     reportSheet.Cells[reportRow, reportCol++] = p.Transactions;
                     reportSheet.Cells[reportRow, reportCol++] = p.Tps;
@@ -391,21 +391,150 @@ namespace AdysTech.IISLogAnalytics
                 }
 
                 reportSpreadsheet.Application.DisplayAlerts = false;
-                reportSpreadsheet.SaveAs (exportFileName, ConflictResolution: XlSaveConflictResolution.xlLocalSessionChanges);
+                reportSpreadsheet.SaveAs(exportFileName, ConflictResolution: XlSaveConflictResolution.xlLocalSessionChanges);
 
                 #endregion
 
-                Console.WriteLine ("Genrating Summary");
+
+
+                reportSpreadsheet.Save();
+
+                #region Page visit Summary
+                Console.WriteLine("Genrating Page visit Summary");
+                reportSheet = reportSpreadsheet.Worksheets.Add(Type.Missing, reportSheet, 1);
+                reportSheet.Name = "Page visit Summary";
+
+
+                startRow = startCol = 1;
+
+                startRow = CollectionToTable(pageViewsForPeriod, startRow, startCol, "Page visit Summary (for the period)");
+
+
+                reportSheet.Shapes.AddChart(XlChartType.xlLine).Select();
+                excelApp.ActiveChart.SetSourceData(Source: reportSheet.get_Range("A1:B" + startRow));
+
+                reportSheet.Shapes.AddChart(XlChartType.xlPie).Select();
+                excelApp.ActiveChart.SetSourceData(Source: reportSheet.get_Range("A1:B" + startRow));
+                excelApp.ActiveChart.ClearToMatchStyle();
+                excelApp.ActiveChart.ChartStyle = 256;
+                excelApp.ActiveChart.SetElement(Microsoft.Office.Core.MsoChartElementType.msoElementChartTitleAboveChart);
+                excelApp.ActiveChart.ChartTitle.Text = "Page visit Summary (for the period) Most Visited Pages";
+
+                reportSheet.Shapes.AddChart(XlChartType.xlBarClustered).Select();
+                excelApp.ActiveChart.SetSourceData(Source: reportSheet.get_Range("A1:D" + startRow));
+                excelApp.ActiveChart.ClearToMatchStyle();
+                excelApp.ActiveChart.ChartStyle = 222;
+                excelApp.ActiveChart.SetElement(Microsoft.Office.Core.MsoChartElementType.msoElementChartTitleAboveChart);
+                excelApp.ActiveChart.ChartTitle.Text = "Page visit Summary (for the period) Average Response Time";
+                SpreadCharts(reportSheet);
+                #endregion
+
+                #region Daily Analysis
+                Console.WriteLine("Genrating Daily Statistics");
+                reportSheet = reportSpreadsheet.Worksheets.Add(Type.Missing, reportSheet, 1);
+                reportSheet.Name = "Daily Analysis";
+
+                foreach (var d in dailyPages.Select(p => p.Timestamp).Distinct())
+                {
+                    filteredEntries.UnionWith(dailyPages.Where(p => p.Timestamp == d.Date)
+                                                                .OrderByDescending(p => p.Hits).Take(topPagesPerDay));
+                    //Debug.WriteLine("Date: {0} - {1}", date, MethodInfo.TotalHits(dailyPages.Where(p => p.Timestamp == d.Date)));
+                }
+
+                var topPages = filteredEntries.Where(p => filteredEntries.Count(q => q.Url == p.Url) > totalDays / 2);
+                startRow = startCol = 1;
+                AddChartFromSeries(startRow, startCol, "Daily Top Pages - Visits Trend", topPages, p => p.Hits, d => d.ToShortDateString());
+
+                startRow = reportRow + 10;
+                startCol = 1;
+                AddChartFromSeries(startRow, startCol, "Daily Top Pages - Response Time(Average) Trend", topPages, p => p.AvgResponseTime, d => d.ToShortDateString());
+
+
+                startRow = reportRow + 10;
+                startCol = 1;
+                AddChartFromSeries(startRow, startCol, "Daily Top Pages - Response Time(90%tile) Trend", topPages, p => p.NinetiethPercentile, d => d.ToShortDateString());
+
+                startRow = 1;
+                startCol = 30;
+                filteredEntries.Clear();
+
+                //reportSheet.Cells[reportRow, reportCol] = "Date";
+                foreach (var d in dailyPages.Select(p => p.Timestamp).Distinct())
+                {
+                    filteredEntries.UnionWith(dailyPages.Where(p => p.Timestamp == d.Date)
+                                           .OrderByDescending(p => p.NinetiethPercentile).Take(topPagesPerDay));
+                }
+                topPages = filteredEntries.Where(p => filteredEntries.Count(q => q.Url == p.Url) > totalDays / 2);
+                AddChartFromSeries(startRow, startCol, "Daily Slow Pages - Response Time(90%tile) Trend", topPages, p => p.NinetiethPercentile, d => d.ToShortDateString());
+
+
+                startRow = reportRow + 10;
+                startCol = 30;
+                filteredEntries.Clear();
+
+                //reportSheet.Cells[reportRow, reportCol] = "Date";
+                foreach (var d in dailyPages.Select(p => p.Timestamp).Distinct())
+                {
+                    filteredEntries.UnionWith(dailyPages.Where(p => p.Timestamp == d.Date)
+                                           .OrderByDescending(p => p.AvgResponseTime).Take(topPagesPerDay));
+                    //Debug.WriteLine("Date: {0} - {1}", date, MethodInfo.TotalHits(dailyPages.Where(p => p.Timestamp == d.Date)));
+                }
+                topPages = filteredEntries.Where(p => filteredEntries.Count(q => q.Url == p.Url) > totalDays / 2);
+                AddChartFromSeries(startRow, startCol, "Daily Slow Pages - Response Time(Average) Trend", topPages, p => p.AvgResponseTime, d => d.ToShortDateString());
+
+                SpreadCharts(reportSheet);
+
+                #endregion
+
+                #region Hourly analysis
+                Console.WriteLine("Genrating Hourly Statistics");
+                reportSheet = reportSpreadsheet.Worksheets.Add(Type.Missing, reportSheet, 1);
+                reportSheet.Name = "Hourly Analysis";
+
+                startRow = 1;
+                startCol = 1;
+                filteredEntries.Clear();
+
+                foreach (var d in hourlyPages.Select(p => p.Timestamp).Distinct())
+                {
+                    filteredEntries.UnionWith(hourlyPages.Where(p => p.Timestamp == d.Date.AddHours(d.Hour))
+                                        .OrderByDescending(p => p.Hits).Take(topPagesPerDay));
+                    //Debug.WriteLine("Date: {0} - {1}", date, MethodInfo.TotalHits(dailyPages.Where(p => p.Timestamp == d.Date)));
+                }
+                var totalHits = hourlyPages.Sum(p => p.Hits);
+                //filter out top pages which are there for 10% of time or 2% traffic
+                topPages = filteredEntries.Where(p => filteredEntries.Count(q => q.Url == p.Url) > totalHours / 10 || p.Hits > totalHits * 2 / 100);
+                startRow += AddChartFromSeries(startRow, startCol, "Hourly Top Pages Summary (By Hits)", topPages, p => p.Hits, d => d.ToString());
+                excelApp.ActiveChart.Axes(XlAxisType.xlCategory).CategoryType = XlCategoryType.xlCategoryScale;
+
+                var hourlyHits = hourlyPages.GroupBy(p => p.Timestamp, q => q);
+                var peakHits = hourlyHits.Select(p => p.Sum(q => q.Hits)).OrderByDescending(p => p).Take(peakHoursCount).Min();
+                var peakHourPages = hourlyHits.Where(p => p.Sum(q => q.Hits) >= peakHits);
+
+                startRow += 10; startCol = 1;
+                AddChartFromSeries(startRow, startCol, "Peak Hour Top Pages Summary (By Hits)", peakHourPages.SelectMany(g => g.Where(p => p.Hits > peakHits * 2 / 100)), p => p.Hits, d => d.ToString());
+                excelApp.ActiveChart.Axes(XlAxisType.xlCategory).CategoryType = XlCategoryType.xlCategoryScale;
+
+                SpreadCharts(reportSheet);
+                #endregion
+
+                #region URL Param Hits Summary
+                reportSheet = reportSpreadsheet.Worksheets.Add(Type.Missing, reportSheet, 1);
+                startRow = startCol = 1;
+                reportSheet.Name = "URL Parameters";
+                CollectionToTable(pageViewsForPeriod, startRow, startCol, "URL Parameters Summary (for the period)");
+                #endregion
 
                 #region Summary
-                reportSheet = reportSpreadsheet.Worksheets.Add (reportSheet, Type.Missing, 1);
+                Console.WriteLine("Genrating Summary");
+                reportSheet = reportSpreadsheet.Worksheets.Add(reportSheet, Type.Missing, 1);
                 reportRow = reportCol = 1;
                 reportSheet.Name = "Summary";
                 reportSheet.Cells[reportRow, 1] = "Running From";
                 reportSheet.Cells[reportRow++, 2] = curerntPath;
 
                 reportSheet.Cells[reportRow, 1] = "Commandline Argument";
-                reportSheet.Cells[reportRow++, 2] = string.Join (";", cmdArgs.Select (x => x.Key + "=" + x.Value));
+                reportSheet.Cells[reportRow++, 2] = string.Join(";", cmdArgs.Select(x => x.Key + "=" + x.Value));
 
                 reportSheet.Cells[reportRow, 1] = "Files Processed";
                 reportSheet.Cells[reportRow++, 2] = fileCount;
@@ -419,11 +548,24 @@ namespace AdysTech.IISLogAnalytics
                 reportSheet.Cells[reportRow, 1] = "TotalHits";
                 reportSheet.Cells[reportRow++, 2] = TotalHits;
 
+                reportSheet.Cells[reportRow, 1] = "Average Transactions/Sec";
+                reportSheet.Cells[reportRow++, 2] = requests.Average(p => p.Tps);
+
+                reportSheet.Cells[reportRow, 1] = "Average Transactions/Hour";
+                reportSheet.Cells[reportRow++, 2] = hourlyHits.Average(p => p.Sum(q => q.Hits));
+
+                reportSheet.Cells[reportRow, 1] = "Peak Hour Transactions/Hour";
+                reportSheet.Cells[reportRow++, 2] = peakHourPages.Average(p => p.Sum(q => q.Hits));
+
+                reportSheet.Cells[reportRow, 1] = "Peak Hour Transactions/Sec";
+                reportSheet.Cells[reportRow++, 2] = peakHourPages.Average(p => p.Sum(q => q.Hits) / 3600);
+
                 reportSheet.Cells[reportRow, 1] = "UniqueIPs";
                 reportSheet.Cells[reportRow++, 2] = uniqueIPs.Count;
 
                 reportSheet.Cells[reportRow, 1] = "ServedRequests";
                 reportSheet.Cells[reportRow++, 2] = ServedRequests;
+
 
                 reportRow += 10;
                 reportSheet.Cells[reportRow++, 1] = "Http Status code summary";
@@ -431,160 +573,33 @@ namespace AdysTech.IISLogAnalytics
                 reportSheet.Cells[reportRow, 1] = "HTTP Code";
                 reportSheet.Cells[reportRow++, 2] = "Count";
 
-                foreach ( var i in httpStatus )
+                foreach (var i in httpStatus)
                 {
                     reportSheet.Cells[reportRow, reportCol++] = i.Key;
-                    reportSheet.Cells[reportRow++, reportCol--] = ( i.Value );
+                    reportSheet.Cells[reportRow++, reportCol--] = (i.Value);
                 }
                 #endregion
-
-                reportSpreadsheet.Save ();
-
-                #region Page visit Summary
-                Console.WriteLine ("Genrating Page visit Summary");
-                reportSheet = reportSpreadsheet.Worksheets.Add (Type.Missing, reportSheet, 1);
-                reportSheet.Name = "Page visit Summary";
-
-
-                startRow = startCol = 1;
-
-                startRow = CollectionToTable (pageViewsForPeriod, startRow, startCol, "Page visit Summary (for the period)");
-
-
-                reportSheet.Shapes.AddChart (XlChartType.xlLine).Select ();
-                excelApp.ActiveChart.SetSourceData (Source: reportSheet.get_Range ("A1:B" + startRow));
-
-                reportSheet.Shapes.AddChart (XlChartType.xlPie).Select ();
-                excelApp.ActiveChart.SetSourceData (Source: reportSheet.get_Range ("A1:B" + startRow));
-                excelApp.ActiveChart.ClearToMatchStyle ();
-                excelApp.ActiveChart.ChartStyle = 256;
-                excelApp.ActiveChart.SetElement (Microsoft.Office.Core.MsoChartElementType.msoElementChartTitleAboveChart);
-                excelApp.ActiveChart.ChartTitle.Text = "Page visit Summary (for the period) Most Visited Pages";
-
-                reportSheet.Shapes.AddChart (XlChartType.xlBarClustered).Select ();
-                excelApp.ActiveChart.SetSourceData (Source: reportSheet.get_Range ("A1:D" + startRow));
-                excelApp.ActiveChart.ClearToMatchStyle ();
-                excelApp.ActiveChart.ChartStyle = 222;
-                excelApp.ActiveChart.SetElement (Microsoft.Office.Core.MsoChartElementType.msoElementChartTitleAboveChart);
-                excelApp.ActiveChart.ChartTitle.Text = "Page visit Summary (for the period) Average Response Time";
-                SpreadCharts (reportSheet);
-                #endregion
-
-                #region Daily Analysis
-                Console.WriteLine ("Genrating Daily Statistics");
-                reportSheet = reportSpreadsheet.Worksheets.Add (Type.Missing, reportSheet, 1);
-                reportSheet.Name = "Daily Analysis";
-
-                foreach ( var d in dailyPages.Select (p => p.Timestamp).Distinct () )
-                {
-                    filteredEntries.UnionWith (dailyPages.Where (p => p.Timestamp == d.Date)
-                                                                .OrderByDescending (p => p.Hits).Take (topPagesPerDay));
-                    //Debug.WriteLine("Date: {0} - {1}", date, MethodInfo.TotalHits(dailyPages.Where(p => p.Timestamp == d.Date)));
-                }
-
-                var topPages = filteredEntries.Where (p => filteredEntries.Count (q => q.Url == p.Url) > totalDays / 2);
-                startRow = startCol = 1;
-                AddChartFromSeries (startRow, startCol, "Daily Top Pages - Visits Trend", topPages, p => p.Hits, d => d.ToShortDateString ());
-
-                startRow = reportRow + 10;
-                startCol = 1;
-                AddChartFromSeries (startRow, startCol, "Daily Top Pages - Response Time(Average) Trend", topPages, p => p.AvgResponseTime, d => d.ToShortDateString ());
-
-
-                startRow = reportRow + 10;
-                startCol = 1;
-                AddChartFromSeries (startRow, startCol, "Daily Top Pages - Response Time(90%tile) Trend", topPages, p => p.NinetiethPercentile, d => d.ToShortDateString ());
-
-                startRow = 1;
-                startCol = 30;
-                filteredEntries.Clear ();
-
-                //reportSheet.Cells[reportRow, reportCol] = "Date";
-                foreach ( var d in dailyPages.Select (p => p.Timestamp).Distinct () )
-                {
-                    filteredEntries.UnionWith (dailyPages.Where (p => p.Timestamp == d.Date)
-                                           .OrderByDescending (p => p.NinetiethPercentile).Take (topPagesPerDay));
-                }
-                topPages = filteredEntries.Where (p => filteredEntries.Count (q => q.Url == p.Url) > totalDays / 2);
-                AddChartFromSeries (startRow, startCol, "Daily Slow Pages - Response Time(90%tile) Trend", topPages, p => p.NinetiethPercentile, d => d.ToShortDateString ());
-
-
-                startRow = reportRow + 10;
-                startCol = 30;
-                filteredEntries.Clear ();
-
-                //reportSheet.Cells[reportRow, reportCol] = "Date";
-                foreach ( var d in dailyPages.Select (p => p.Timestamp).Distinct () )
-                {
-                    filteredEntries.UnionWith (dailyPages.Where (p => p.Timestamp == d.Date)
-                                           .OrderByDescending (p => p.AvgResponseTime).Take (topPagesPerDay));
-                    //Debug.WriteLine("Date: {0} - {1}", date, MethodInfo.TotalHits(dailyPages.Where(p => p.Timestamp == d.Date)));
-                }
-                topPages = filteredEntries.Where (p => filteredEntries.Count (q => q.Url == p.Url) > totalDays / 2);
-                AddChartFromSeries (startRow, startCol, "Daily Slow Pages - Response Time(Average) Trend", topPages, p => p.AvgResponseTime, d => d.ToShortDateString ());
-
-                SpreadCharts (reportSheet);
-
-                #endregion
-
-                #region Hourly analysis
-                Console.WriteLine ("Genrating Hourly Statistics");
-                reportSheet = reportSpreadsheet.Worksheets.Add (Type.Missing, reportSheet, 1);
-                reportSheet.Name = "Hourly Analysis";
-
-                startRow = 1;
-                startCol = 1;
-                filteredEntries.Clear ();
-
-                foreach ( var d in hourlyPages.Select (p => p.Timestamp).Distinct () )
-                {
-                    filteredEntries.UnionWith (hourlyPages.Where (p => p.Timestamp == d.Date.AddHours (d.Hour))
-                                        .OrderByDescending (p => p.Hits).Take (topPagesPerDay));
-                    //Debug.WriteLine("Date: {0} - {1}", date, MethodInfo.TotalHits(dailyPages.Where(p => p.Timestamp == d.Date)));
-                }
-                var totalHits = hourlyPages.Sum (p => p.Hits);
-                //filter out top pages which are there for 10% of time or 2% traffic
-                topPages = filteredEntries.Where (p => filteredEntries.Count (q => q.Url == p.Url) > totalHours / 10 || p.Hits > totalHits * 2 / 100);
-                startRow += AddChartFromSeries (startRow, startCol, "Hourly Top Pages Summary (By Hits)", topPages, p => p.Hits, d => d.ToString ());
-                excelApp.ActiveChart.Axes (XlAxisType.xlCategory).CategoryType = XlCategoryType.xlCategoryScale;
-
-                var hourlyHits = hourlyPages.GroupBy (p => p.Timestamp, q => q);
-                var peakHits = hourlyHits.Select (p => p.Sum (q => q.Hits)).OrderByDescending (p => p).Take (peakHoursCount).Min ();
-                var peakHourPages = hourlyHits.Where (p => p.Sum (q => q.Hits) >= peakHits).SelectMany (g => g.Where (p => p.Hits > peakHits * 2 / 100));
-
-                startRow += 10; startCol = 1;
-                AddChartFromSeries (startRow, startCol, "Peak Hour Top Pages Summary (By Hits)", peakHourPages, p => p.Hits, d => d.ToString ());
-                SpreadCharts (reportSheet);
-                #endregion
-
-                #region URL Param Hits Summary
-                reportSheet = reportSpreadsheet.Worksheets.Add (Type.Missing, reportSheet, 1);
-                startRow = startCol = 1;
-                reportSheet.Name = "URL Parameters";
-                CollectionToTable (pageViewsForPeriod, startRow, startCol, "URL Parameters Summary (for the period)");
-                #endregion
-
 
             }
-            catch ( Exception e )
+            catch (Exception e)
             {
-                Console.WriteLine ("Error!! {0}:{1}", e.GetType ().Name, e.Message);
-                Debug.WriteLine ("Error!! {0}:{1}", e.GetType ().Name, e.Message);
+                Console.WriteLine("Error!! {0}:{1}", e.GetType().Name, e.Message);
+                Debug.WriteLine("Error!! {0}:{1}", e.GetType().Name, e.Message);
             }
             finally
             {
-                if ( excelApp != null )
+                if (excelApp != null)
                 {
                     excelApp.Calculation = XlCalculation.xlCalculationAutomatic;
-                    if ( reportSpreadsheet != null )
+                    if (reportSpreadsheet != null)
                     {
-                        reportSpreadsheet.Save ();
-                        reportSpreadsheet.Close ();
-                        excelApp.Quit ();
+                        reportSpreadsheet.Save();
+                        reportSpreadsheet.Close();
+                        excelApp.Quit();
                     }
                 }
-                File.Delete (tmpFile);
-                Console.WriteLine ("Done!!");
+                File.Delete(tmpFile);
+                Console.WriteLine("Done!!");
             }
             #endregion
         }
