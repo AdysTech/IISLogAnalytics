@@ -5,6 +5,7 @@ using Microsoft.Office.Interop.Excel;
 using System;
 using System.Collections.Generic;
 using System.Diagnostics;
+using System.Globalization;
 using System.IO;
 using System.Linq;
 using System.Text;
@@ -483,16 +484,16 @@ namespace AdysTech.IISLogAnalytics
 
                 var topPages = filteredEntries.Where (p => filteredEntries.Count (q => q.Url == p.Url) > totalDays / 2);
                 startRow = startCol = 1;
-                AddChartFromSeries (startRow, startCol, "Daily Top Pages - Visits Trend", topPages, p => p.Hits, d => d.ToShortDateString ());
+                AddChartFromSeries (startRow, startCol, "Daily Top Pages - Visits Trend", topPages, p => p.Hits, d => d.ToString (DateTimeFormatInfo.CurrentInfo.ShortDatePattern));
 
                 startRow = reportRow + 10;
                 startCol = 1;
-                AddChartFromSeries (startRow, startCol, "Daily Top Pages - Response Time(Average) Trend", topPages, p => p.AvgResponseTime, d => d.ToShortDateString ());
+                AddChartFromSeries (startRow, startCol, "Daily Top Pages - Response Time(Average) Trend", topPages, p => p.AvgResponseTime, d => d.ToString (DateTimeFormatInfo.CurrentInfo.ShortDatePattern));
 
 
                 startRow = reportRow + 10;
                 startCol = 1;
-                AddChartFromSeries (startRow, startCol, "Daily Top Pages - Response Time(90%tile) Trend", topPages, p => p.NinetiethPercentile, d => d.ToShortDateString ());
+                AddChartFromSeries (startRow, startCol, "Daily Top Pages - Response Time(90%tile) Trend", topPages, p => p.NinetiethPercentile, d => d.ToString (DateTimeFormatInfo.CurrentInfo.ShortDatePattern));
 
                 startRow = 1;
                 startCol = 30;
@@ -505,7 +506,7 @@ namespace AdysTech.IISLogAnalytics
                                            .OrderByDescending (p => p.NinetiethPercentile).Take (topPagesPerDay));
                 }
                 topPages = filteredEntries.Where (p => filteredEntries.Count (q => q.Url == p.Url) > totalDays / 2);
-                AddChartFromSeries (startRow, startCol, "Daily Slow Pages - Response Time(90%tile) Trend", topPages, p => p.NinetiethPercentile, d => d.ToShortDateString ());
+                AddChartFromSeries (startRow, startCol, "Daily Slow Pages - Response Time(90%tile) Trend", topPages, p => p.NinetiethPercentile, d => d.ToString (DateTimeFormatInfo.CurrentInfo.ShortDatePattern));
 
 
                 startRow = reportRow + 10;
@@ -520,7 +521,7 @@ namespace AdysTech.IISLogAnalytics
                     //Debug.WriteLine("Date: {0} - {1}", date, MethodInfo.TotalHits(dailyPages.Where(p => p.Timestamp == d.Date)));
                 }
                 topPages = filteredEntries.Where (p => filteredEntries.Count (q => q.Url == p.Url) > totalDays / 2);
-                AddChartFromSeries (startRow, startCol, "Daily Slow Pages - Response Time(Average) Trend", topPages, p => p.AvgResponseTime, d => d.ToShortDateString ());
+                AddChartFromSeries (startRow, startCol, "Daily Slow Pages - Response Time(Average) Trend", topPages, p => p.AvgResponseTime, d => d.ToString (DateTimeFormatInfo.CurrentInfo.ShortDatePattern));
 
                 SpreadCharts (reportSheet);
 
