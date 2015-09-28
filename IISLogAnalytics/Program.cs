@@ -566,7 +566,7 @@ namespace AdysTech.IISLogAnalytics
                 reportSheet = reportSpreadsheet.Worksheets.Add (Type.Missing, reportSheet, 1);
                 startRow = startCol = 1;
                 reportSheet.Name = "URL Parameters";
-                CollectionToTable (pageViewsForPeriod.Values, startRow, startCol, "URL Parameters Summary (for the period)");
+                CollectionToTable (urlParamHits.Values, startRow, startCol, "URL Parameters Summary (for the period)");
                 #endregion
 
                 #region Summary
