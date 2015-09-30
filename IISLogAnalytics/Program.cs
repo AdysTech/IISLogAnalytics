@@ -214,13 +214,14 @@ namespace AdysTech.IISLogAnalytics
                     Dictionary<string, int> fieldIndex = new Dictionary<string, int> ();
 
                     #region Content filter
+                    matchedEntries = contents;
+                    
                     if ( filterTypes != null && filterTypes.Any () )
-                        matchedEntries = contents.Where (s => s.StartsWith ("#") || filterTypes.Any (x => s.ToLower ().Contains (x + ' ')));
-                    else if ( ignoredTypes != null && ignoredTypes.Any () )
-                        matchedEntries = contents.Where (s => s.StartsWith ("#") || !ignoredTypes.Any (x => s.ToLower ().Contains (x + ' ')));
-                    else
-                        matchedEntries = contents;
-
+                        matchedEntries = matchedEntries.Where (s => s.StartsWith ("#") || filterTypes.Any (x => s.ToLower ().Contains (x + ' ')));
+                        
+                    if ( ignoredTypes != null && ignoredTypes.Any () )
+                        matchedEntries = matchedEntries.Where (s => s.StartsWith ("#") || !ignoredTypes.Any (x => s.ToLower ().Contains (x + ' ')));
+                    
                     foreach ( var rawLogEntry in matchedEntries )
                     {
 
@@ -567,7 +568,7 @@ namespace AdysTech.IISLogAnalytics
                 #endregion
 
                 #region URL Param Hits Summary
-                if ( hitsPerURLParams.Any () )
+                if ( hitsPerURLParams!=null && hitsPerURLParams.Any () )
                 {
                     Console.WriteLine ("{0} Genrating URL parameter statistics", stopWatch.Elapsed.ToString (@"hh\:mm\:ss"));
 
