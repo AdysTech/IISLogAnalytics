@@ -30,6 +30,7 @@ namespace AdysTech.IISLogAnalytics
         static Workbook reportSpreadsheet = null;
         static Worksheet reportSheet = null;
 
+
         static int Main(string[] args)
         {
             #region Command Line argument processing
@@ -45,6 +46,7 @@ namespace AdysTech.IISLogAnalytics
                 Console.WriteLine ("-param <comma seperated list of patterns>      : Summarize specific URL parameters");
                 Console.WriteLine ("-export <export filename>                      : Excel file report name, default will be with time stamp");
                 Console.WriteLine ("-folder <log file folder path>                 : Current folder will be defaulted. All .log files in this folder will be processed.");
+                Console.WriteLine ("Add a space after the pattern if you want extension mapping (e.g. .aspx ,.jpg)");
                 return 0;
             }
 
@@ -60,7 +62,7 @@ namespace AdysTech.IISLogAnalytics
             }
 
 
-            List<string> ignoredTypes = null, filterTypes = null, hitsPerURLParams = null;
+            List<string> ignoredTypes = new List<string> (), filterTypes = new List<string> (), hitsPerURLParams = new List<string> ();
             if ( cmdArgs.ContainsKey (IgnoreSwitch) )
             {
                 ignoredTypes = cmdArgs[IgnoreSwitch].ToLower ().Split (',').ToList ();
@@ -142,7 +144,9 @@ namespace AdysTech.IISLogAnalytics
 
             Stopwatch stopWatch = new Stopwatch ();
             stopWatch.Start ();
-            #region Combine files
+
+
+
             //var files = Directory.GetFiles(curerntPath, "*.log").ToList();
             var files = new DirectoryInfo (curerntPath)
                         .GetFiles ("*.log")
@@ -163,410 +167,442 @@ namespace AdysTech.IISLogAnalytics
             int fileCount = 0;
             int headerRows = 4;
             int entryCount = 0;
+
+
+
+            List<IISLogEntry> processingList = new List<IISLogEntry> ();
+            DateTime nextTime = DateTime.MinValue;
+
+            long TotalHits = 0, ServedRequests = 0;
+            List<ConcurrentRequest> requests = new List<ConcurrentRequest> ();
+            HashSet<string> uniqueIPs = new HashSet<string> ();
+            Dictionary<int, int> httpStatus = new Dictionary<int, int> ();
+            Dictionary<string, MethodInfo> pageViewsForPeriod = new Dictionary<string, MethodInfo> ();
+
+            int totalDays = 0, totalHours = 0;
+
+            Dictionary<string, MethodInfo> pageViewsDaily = new Dictionary<string, MethodInfo> ();
+            HashSet<MethodInfo> dailyPages = new HashSet<MethodInfo> ();
+
+            Dictionary<string, MethodInfo> pageViewsHourly = new Dictionary<string, MethodInfo> ();
+            HashSet<MethodInfo> hourlyPages = new HashSet<MethodInfo> ();
+
+            //hits for key URL parameters
+            Dictionary<string, MethodInfo> urlParamHits = new Dictionary<string, MethodInfo> ();
+            DateTime firstEntry = DateTime.MinValue, lastEntry = DateTime.MinValue;
+
+            //placeholder
+            HashSet<MethodInfo> filteredEntries = new HashSet<MethodInfo> ();
+            int startRow = 1, startCol = 1;
+            int reportRow = 2, reportCol = 1;
+
+
+            Console.WriteLine ("Preparing to Process..");
+
+
             foreach ( var f in files )
             {
                 try
                 {
-                    Console.Write ("\r{0} Finding matching log entries in {1} of {2} files, {3}%       ", stopWatch.Elapsed.ToString (@"hh\:mm\:ss"), ++fileCount, totalFile, fileCount * 100 / totalFile);
-                    var contents = File.ReadAllLines (f);
-                    //var csv = from line in contents
-                    //          select Regex.Split(line, ",(?=(?:[^\"]*\"[^\"]*\")*[^\"]*$)").ToArray();
-                    if ( fileCount == 1 )
+
+                    ++fileCount;
+                    var progress = fileCount * 100 / totalFile;
+
+                    IEnumerable<string> matchedEntries = null;
+
+                    var contents = File.ReadLines (f);
+
+
+                    Dictionary<string, int> fieldIndex = new Dictionary<string, int> ();
+
+                    #region Content filter
+
+
+                    if ( filterTypes.Any () && ignoredTypes.Any () )
+                        matchedEntries = contents.Where (s => s.StartsWith ("#") ||
+                            ( filterTypes.Any (x => s.ToLower ().Contains (x)) &&
+                            !ignoredTypes.Any (x => s.ToLower ().Contains (x)) ));
+
+                    else if ( filterTypes.Any () )
+                        matchedEntries = contents.Where (s => s.StartsWith ("#") || filterTypes.Any (x => s.ToLower ().Contains (x)));
+
+                    else if ( ignoredTypes.Any () )
+                        matchedEntries = contents.Where (s => s.StartsWith ("#") || !ignoredTypes.Any (x => s.ToLower ().Contains (x)));
+                    else
+                        matchedEntries = contents;
+
+
+                    foreach ( var rawLogEntry in matchedEntries )
                     {
-                        File.WriteAllLines (tmpFile, contents.Skip (headerRows - 1).Take (1));
-                    }
-                    IEnumerable<string> list = null;
 
-                    if ( filterTypes != null && filterTypes.Any () )
-                        list = contents.Skip (headerRows).Where (s => filterTypes.Any (x => s.ToLower ().Contains (x + ' ')));
-                    else if ( ignoredTypes != null && ignoredTypes.Any () )
-                        list = contents.Skip (headerRows).Where (s => !ignoredTypes.Any (x => s.ToLower ().Contains (x + ' ')));
-                    else
-                        list = contents.Skip (headerRows);
-                    File.AppendAllLines (tmpFile, list);
-                    entryCount += list.Count ();
-                }
-                catch ( Exception e )
-                {
-                    Console.WriteLine ("\rError Processing {0}, Exception:{1}", f, e.Message);
-                }
-            }
+                        IISLogEntry logEntry;
+                        if ( rawLogEntry.StartsWith ("#") )
+                        {
+                            if ( rawLogEntry.StartsWith ("#Fields:") )
+                                fieldIndex = ParseHeaderFields (rawLogEntry);
+                        }
+                        else
+                        {
+                            Console.Write ("\r{0} File {1} of {2} files ({3}%), processing {4}      ", stopWatch.Elapsed.ToString (@"hh\:mm\:ss"), fileCount, totalFile, progress, ++TotalHits);
 
-            Console.WriteLine ("\r\nDone, Found {0} entries", entryCount);
-            #endregion
+                            var columns = rawLogEntry.Split (' ');
+                            logEntry = new IISLogEntry ()
+                            {
+                                TimeStamp = DateTime.Parse (columns[0] + " " + columns[1]),
+                                ClientIPAddress = fieldIndex.ContainsKey (IISLogEntry.propClientIPAddress) ? columns[fieldIndex[IISLogEntry.propClientIPAddress]] : String.Empty,
+                                UserName = fieldIndex.ContainsKey (IISLogEntry.propUserName) ? columns[fieldIndex[IISLogEntry.propUserName]] : String.Empty,
+                                ServiceNameandInstanceNumber = fieldIndex.ContainsKey (IISLogEntry.propServiceNameandInstanceNumber) ? columns[fieldIndex[IISLogEntry.propServiceNameandInstanceNumber]] : String.Empty,
+                                ServerName = fieldIndex.ContainsKey (IISLogEntry.propServerName) ? columns[fieldIndex[IISLogEntry.propServerName]] : String.Empty,
+                                ServerIPAddress = fieldIndex.ContainsKey (IISLogEntry.propServerIPAddress) ? columns[fieldIndex[IISLogEntry.propServerIPAddress]] : String.Empty,
+                                ServerPort = fieldIndex.ContainsKey (IISLogEntry.propClientIPAddress) ? Int32.Parse (columns[fieldIndex[IISLogEntry.propServerPort]]) : 0,
+                                Method = fieldIndex.ContainsKey (IISLogEntry.propMethod) ? columns[fieldIndex[IISLogEntry.propMethod]] : String.Empty,
+                                URIStem = fieldIndex.ContainsKey (IISLogEntry.propURIStem) ? columns[fieldIndex[IISLogEntry.propURIStem]] : String.Empty,
+                                URIQuery = fieldIndex.ContainsKey (IISLogEntry.propURIQuery) ? columns[fieldIndex[IISLogEntry.propURIQuery]] : String.Empty,
+                                HTTPStatus = fieldIndex.ContainsKey (IISLogEntry.propHTTPStatus) ? Int32.Parse (columns[fieldIndex[IISLogEntry.propHTTPStatus]]) : 0,
+                                //Win32Status = fieldIndex.ContainsKey(IISLogEntry.propWin32Status) ? Int32.Parse(row[fieldIndex[IISLogEntry.propWin32Status]]) : 0,
+                                BytesSent = fieldIndex.ContainsKey (IISLogEntry.propBytesSent) ? Int32.Parse (columns[fieldIndex[IISLogEntry.propBytesSent]]) : 0,
+                                BytesReceived = fieldIndex.ContainsKey (IISLogEntry.propBytesReceived) ? Int32.Parse (columns[fieldIndex[IISLogEntry.propBytesReceived]]) : 0,
+                                TimeTaken = fieldIndex.ContainsKey (IISLogEntry.propTimeTaken) ? Int32.Parse (columns[fieldIndex[IISLogEntry.propTimeTaken]]) : 0,
+                                ProtocolVersion = fieldIndex.ContainsKey (IISLogEntry.propProtocolVersion) ? columns[fieldIndex[IISLogEntry.propProtocolVersion]] : String.Empty,
+                                Host = fieldIndex.ContainsKey (IISLogEntry.propHost) ? columns[fieldIndex[IISLogEntry.propHost]] : String.Empty,
+                                UserAgent = fieldIndex.ContainsKey (IISLogEntry.propUserAgent) ? columns[fieldIndex[IISLogEntry.propUserAgent]] : String.Empty,
+                                Cookie = fieldIndex.ContainsKey (IISLogEntry.propCookie) ? columns[fieldIndex[IISLogEntry.propCookie]] : String.Empty,
+                                Referrer = fieldIndex.ContainsKey (IISLogEntry.propReferrer) ? columns[fieldIndex[IISLogEntry.propReferrer]] : String.Empty,
+                                ProtocolSubstatus = fieldIndex.ContainsKey (IISLogEntry.propProtocolSubstatus) ? columns[fieldIndex[IISLogEntry.propProtocolSubstatus]] : String.Empty
+                            };
 
-
-
-            #region Processing
-            try
-            {
-                Console.WriteLine ("Preparing to Process..");
-
-                var rawLogEntries = File.ReadLines (tmpFile);
-                var fields = rawLogEntries.Take (1).FirstOrDefault ().Split (' ');
-                Dictionary<string, int> fieldIndex = new Dictionary<string, int> ();
-
-                for ( int i = 1; i < fields.Count (); i++ )
-                {
-                    fieldIndex.Add (fields[i], i - 1);
-                }
-                //any enties with # will appear in first 4 lines. They should have skipped while combining them. But seen error once, and adding as a safty net.
-                var logEntries = rawLogEntries.Skip (1).Where (row => !row.StartsWith ("#")).Select (row => row.Split (' ')).Select (row =>
-                new IISLogEntry
-                {
-                    TimeStamp = DateTime.Parse (row[0] + " " + row[1]),
-                    ClientIPAddress = fieldIndex.ContainsKey (IISLogEntry.propClientIPAddress) ? row[fieldIndex[IISLogEntry.propClientIPAddress]] : String.Empty,
-                    UserName = fieldIndex.ContainsKey (IISLogEntry.propUserName) ? row[fieldIndex[IISLogEntry.propUserName]] : String.Empty,
-                    ServiceNameandInstanceNumber = fieldIndex.ContainsKey (IISLogEntry.propServiceNameandInstanceNumber) ? row[fieldIndex[IISLogEntry.propServiceNameandInstanceNumber]] : String.Empty,
-                    ServerName = fieldIndex.ContainsKey (IISLogEntry.propServerName) ? row[fieldIndex[IISLogEntry.propServerName]] : String.Empty,
-                    ServerIPAddress = fieldIndex.ContainsKey (IISLogEntry.propServerIPAddress) ? row[fieldIndex[IISLogEntry.propServerIPAddress]] : String.Empty,
-                    ServerPort = fieldIndex.ContainsKey (IISLogEntry.propClientIPAddress) ? Int32.Parse (row[fieldIndex[IISLogEntry.propServerPort]]) : 0,
-                    Method = fieldIndex.ContainsKey (IISLogEntry.propMethod) ? row[fieldIndex[IISLogEntry.propMethod]] : String.Empty,
-                    URIStem = fieldIndex.ContainsKey (IISLogEntry.propURIStem) ? row[fieldIndex[IISLogEntry.propURIStem]] : String.Empty,
-                    URIQuery = fieldIndex.ContainsKey (IISLogEntry.propURIQuery) ? row[fieldIndex[IISLogEntry.propURIQuery]] : String.Empty,
-                    HTTPStatus = fieldIndex.ContainsKey (IISLogEntry.propHTTPStatus) ? Int32.Parse (row[fieldIndex[IISLogEntry.propHTTPStatus]]) : 0,
-                    //Win32Status = fieldIndex.ContainsKey(IISLogEntry.propWin32Status) ? Int32.Parse(row[fieldIndex[IISLogEntry.propWin32Status]]) : 0,
-                    BytesSent = fieldIndex.ContainsKey (IISLogEntry.propBytesSent) ? Int32.Parse (row[fieldIndex[IISLogEntry.propBytesSent]]) : 0,
-                    BytesReceived = fieldIndex.ContainsKey (IISLogEntry.propBytesReceived) ? Int32.Parse (row[fieldIndex[IISLogEntry.propBytesReceived]]) : 0,
-                    TimeTaken = fieldIndex.ContainsKey (IISLogEntry.propTimeTaken) ? Int32.Parse (row[fieldIndex[IISLogEntry.propTimeTaken]]) : 0,
-                    ProtocolVersion = fieldIndex.ContainsKey (IISLogEntry.propProtocolVersion) ? row[fieldIndex[IISLogEntry.propProtocolVersion]] : String.Empty,
-                    Host = fieldIndex.ContainsKey (IISLogEntry.propHost) ? row[fieldIndex[IISLogEntry.propHost]] : String.Empty,
-                    UserAgent = fieldIndex.ContainsKey (IISLogEntry.propUserAgent) ? row[fieldIndex[IISLogEntry.propUserAgent]] : String.Empty,
-                    Cookie = fieldIndex.ContainsKey (IISLogEntry.propCookie) ? row[fieldIndex[IISLogEntry.propCookie]] : String.Empty,
-                    Referrer = fieldIndex.ContainsKey (IISLogEntry.propReferrer) ? row[fieldIndex[IISLogEntry.propReferrer]] : String.Empty,
-                    ProtocolSubstatus = fieldIndex.ContainsKey (IISLogEntry.propProtocolSubstatus) ? row[fieldIndex[IISLogEntry.propProtocolSubstatus]] : String.Empty
-                });
-
-
-
-                List<IISLogEntry> processingList = new List<IISLogEntry> ();
-                DateTime nextTime = DateTime.MinValue;
-
-                long TotalHits = 0, ServedRequests = 0;
-                List<ConcurrentRequest> requests = new List<ConcurrentRequest> ();
-                HashSet<string> uniqueIPs = new HashSet<string> ();
-                Dictionary<int, int> httpStatus = new Dictionary<int, int> ();
-                Dictionary<string, MethodInfo> pageViewsForPeriod = new Dictionary<string, MethodInfo> ();
-
-                int totalDays = 0, totalHours = 0;
-
-                Dictionary<string, MethodInfo> pageViewsDaily = new Dictionary<string, MethodInfo> ();
-                HashSet<MethodInfo> dailyPages = new HashSet<MethodInfo> ();
-
-                Dictionary<string, MethodInfo> pageViewsHourly = new Dictionary<string, MethodInfo> ();
-                HashSet<MethodInfo> hourlyPages = new HashSet<MethodInfo> ();
-
-                //hits for key URL parameters
-                Dictionary<string, MethodInfo> urlParamHits = new Dictionary<string, MethodInfo> ();
-                DateTime firstEntry = DateTime.MinValue, lastEntry = DateTime.MinValue;
-
-                //placeholder
-                HashSet<MethodInfo> filteredEntries = new HashSet<MethodInfo> ();
-                int startRow = 1, startCol = 1;
-                int reportRow = 2, reportCol = 1;
-
-
-                #region entry processing
-                foreach ( var logEntry in logEntries )
-                {
-                    Console.Write ("\r{0} Processing {1} of {2}  {3}%      ",stopWatch.Elapsed.ToString (@"hh\:mm\:ss"), ++TotalHits, entryCount, TotalHits * 100 / entryCount);
-                    var url = logEntry.URIStem.ToLower ();
-
-                    #region HTTP status codes & IP
-                    if ( httpStatus.ContainsKey (logEntry.HTTPStatus) )
-                        httpStatus[logEntry.HTTPStatus]++;
-                    else
-                        httpStatus.Add (logEntry.HTTPStatus, 1);
-
-                    if ( !uniqueIPs.Contains (logEntry.ClientIPAddress) )
-                        uniqueIPs.Add (logEntry.ClientIPAddress);
                     #endregion
 
-                    if ( nextTime == DateTime.MinValue )
-                    {
-                        firstEntry = logEntry.TimeStamp;
-                        lastEntry = logEntry.TimeStamp;
-                        nextTime = logEntry.TimeStamp.Date.
-                                    AddHours (logEntry.TimeStamp.Hour).
-                                    AddMinutes (logEntry.TimeStamp.Minute).
-                                    AddMinutes (concurrencyWindow);
-                    }
+                            #region entry processing
 
-                    if ( logEntry.TimeStamp > nextTime )
-                    {
-                        if ( processingList.Any () )
-                        {
-                            requests.Add (new ConcurrentRequest (concurrencyWindow)
-                            {
-                                TimeStamp = nextTime,
-                                Transactions = processingList.Count,
-                                AverageResponseTime = processingList.Average (p => p.TimeTaken),
-                                BytesSent = processingList.Sum (t => t.BytesSent)
-                            });
-                            processingList.Clear ();
-                        }
-                        else
-                        {
-                            requests.Add (new ConcurrentRequest (concurrencyWindow)
-                            {
-                                TimeStamp = nextTime,
-                                Transactions = 0,
-                                AverageResponseTime = 0,
-                                BytesSent = 0
-                            });
-                        }
-                        nextTime = nextTime.AddMinutes (concurrencyWindow);
-                    }
+                            var url = logEntry.URIStem.ToLower ();
 
-                    if ( lastEntry.Hour != logEntry.TimeStamp.Hour )
-                    {
-                        totalHours++;
-                        AddHourlyPages (pageViewsHourly, hourlyPages, lastEntry);
-                    }
-
-                    if ( lastEntry.Date != logEntry.TimeStamp.Date )
-                    {
-                        totalDays++;
-                        AddDailyPages (pageViewsDaily, dailyPages, lastEntry);
-                    }
-
-                    //add the current one to future processing, otherwise one in teh borderlien will be missing
-                    if ( logEntry.HTTPStatus == 200 )
-                    {
-                        processingList.Add (logEntry);
-                        ServedRequests++;
-
-                        if ( pageViewsForPeriod.ContainsKey (url) )
-                            pageViewsForPeriod[url].Hit (logEntry.TimeTaken);
-                        else
-                            pageViewsForPeriod.Add (url, new MethodInfo (logEntry.URIStem, logEntry.TimeTaken));
-
-                        if ( lastEntry.Hour == logEntry.TimeStamp.Hour )
-                        {
-                            if ( pageViewsHourly.ContainsKey (url) )
-                                pageViewsHourly[url].Hit (logEntry.TimeTaken);
+                            #region HTTP status codes & IP
+                            if ( httpStatus.ContainsKey (logEntry.HTTPStatus) )
+                                httpStatus[logEntry.HTTPStatus]++;
                             else
-                                pageViewsHourly.Add (url, new MethodInfo (logEntry.URIStem, logEntry.TimeTaken));
-                        }
+                                httpStatus.Add (logEntry.HTTPStatus, 1);
 
-                        if ( lastEntry.Date == logEntry.TimeStamp.Date )
-                        {
-                            if ( pageViewsDaily.ContainsKey (url) )
-                                pageViewsDaily[url].Hit (logEntry.TimeTaken);
-                            else
-                                pageViewsDaily.Add (url, new MethodInfo (logEntry.URIStem, logEntry.TimeTaken));
-                        }
+                            if ( !uniqueIPs.Contains (logEntry.ClientIPAddress) )
+                                uniqueIPs.Add (logEntry.ClientIPAddress);
+                            #endregion
 
-                        if ( hitsPerURLParams != null && hitsPerURLParams.Any () )
-                        {
-                            var urlParam = hitsPerURLParams.Where (p => logEntry.URIQuery.Contains (p)).FirstOrDefault ();
-                            if ( urlParam != null && urlParam != String.Empty )
+                            if ( nextTime == DateTime.MinValue )
                             {
-                                if ( urlParamHits.ContainsKey (url) )
-                                    urlParamHits[url].Hit (logEntry.TimeTaken);
-                                else
-                                    urlParamHits.Add (url, new MethodInfo (urlParam, logEntry.TimeTaken));
+                                firstEntry = logEntry.TimeStamp;
+                                lastEntry = logEntry.TimeStamp;
+                                nextTime = logEntry.TimeStamp.Date.
+                                            AddHours (logEntry.TimeStamp.Hour).
+                                            AddMinutes (logEntry.TimeStamp.Minute).
+                                            AddMinutes (concurrencyWindow);
                             }
+
+                            if ( logEntry.TimeStamp > nextTime )
+                            {
+                                if ( processingList.Any () )
+                                {
+                                    requests.Add (new ConcurrentRequest (concurrencyWindow)
+                                    {
+                                        TimeStamp = nextTime,
+                                        Transactions = processingList.Count,
+                                        AverageResponseTime = processingList.Average (p => p.TimeTaken),
+                                        BytesSent = processingList.Sum (t => t.BytesSent)
+                                    });
+                                    processingList.Clear ();
+                                }
+                                else
+                                {
+                                    requests.Add (new ConcurrentRequest (concurrencyWindow)
+                                    {
+                                        TimeStamp = nextTime,
+                                        Transactions = 0,
+                                        AverageResponseTime = 0,
+                                        BytesSent = 0
+                                    });
+                                }
+                                nextTime = nextTime.AddMinutes (concurrencyWindow);
+                            }
+
+                            if ( lastEntry.Hour != logEntry.TimeStamp.Hour )
+                            {
+                                totalHours++;
+                                AddHourlyPages (pageViewsHourly, hourlyPages, lastEntry);
+                            }
+
+                            if ( lastEntry.Date != logEntry.TimeStamp.Date )
+                            {
+                                totalDays++;
+                                AddDailyPages (pageViewsDaily, dailyPages, lastEntry);
+                            }
+
+                            //add the current one to future processing, otherwise one in teh borderlien will be missing
+                            if ( logEntry.HTTPStatus == 200 )
+                            {
+                                processingList.Add (logEntry);
+                                ServedRequests++;
+
+                                if ( pageViewsForPeriod.ContainsKey (url) )
+                                    pageViewsForPeriod[url].Hit (logEntry.TimeTaken);
+                                else
+                                    pageViewsForPeriod.Add (url, new MethodInfo (logEntry.URIStem, logEntry.TimeTaken));
+
+                                if ( lastEntry.Hour == logEntry.TimeStamp.Hour )
+                                {
+                                    if ( pageViewsHourly.ContainsKey (url) )
+                                        pageViewsHourly[url].Hit (logEntry.TimeTaken);
+                                    else
+                                        pageViewsHourly.Add (url, new MethodInfo (logEntry.URIStem, logEntry.TimeTaken));
+                                }
+
+                                if ( lastEntry.Date == logEntry.TimeStamp.Date )
+                                {
+                                    if ( pageViewsDaily.ContainsKey (url) )
+                                        pageViewsDaily[url].Hit (logEntry.TimeTaken);
+                                    else
+                                        pageViewsDaily.Add (url, new MethodInfo (logEntry.URIStem, logEntry.TimeTaken));
+                                }
+
+                                if ( hitsPerURLParams.Any () )
+                                {
+                                    var urlParam = hitsPerURLParams.Where (p => logEntry.URIQuery.Contains (p)).FirstOrDefault ();
+                                    if ( urlParam != null && urlParam != String.Empty )
+                                    {
+                                        if ( urlParamHits.ContainsKey (url) )
+                                            urlParamHits[url].Hit (logEntry.TimeTaken);
+                                        else
+                                            urlParamHits.Add (url, new MethodInfo (urlParam, logEntry.TimeTaken));
+                                    }
+                                }
+                            }
+
+                            lastEntry = logEntry.TimeStamp;
                         }
                     }
 
-                    lastEntry = logEntry.TimeStamp;
-                }
-
-                if ( processingList.Any () )
-                {
-                    requests.Add (new ConcurrentRequest (concurrencyWindow)
+                    if ( processingList.Any () )
                     {
-                        TimeStamp = nextTime,
-                        Transactions = processingList.Count,
-                        AverageResponseTime = processingList.Average (p => p.TimeTaken),
-                        BytesSent = processingList.Sum (t => t.BytesSent)
-                    });
-                    processingList.Clear ();
+                        requests.Add (new ConcurrentRequest (concurrencyWindow)
+                        {
+                            TimeStamp = nextTime,
+                            Transactions = processingList.Count,
+                            AverageResponseTime = processingList.Average (p => p.TimeTaken),
+                            BytesSent = processingList.Sum (t => t.BytesSent)
+                        });
+                        processingList.Clear ();
+                    }
+                    AddHourlyPages (pageViewsHourly, hourlyPages, lastEntry);
+                    AddDailyPages (pageViewsDaily, dailyPages, lastEntry);
+
+                            #endregion
                 }
-                AddHourlyPages (pageViewsHourly, hourlyPages, lastEntry);
-                AddDailyPages (pageViewsDaily, dailyPages, lastEntry);
 
-                Console.WriteLine ("\nProcessed {0} entries in {1}", TotalHits, stopWatch.Elapsed.ToString (@"hh\:mm\:ss"));
-                #endregion
 
+                catch ( Exception e )
+                {
+                    Console.WriteLine ("Error!! {0}:{1} - {2}", e.GetType ().Name, e.Message, e.StackTrace);
+                    Debug.WriteLine ("Error!! {0}:{1}", e.GetType ().Name, e.Message);
+                }
+            }
+            Console.WriteLine ("\nGenerating Statistics");
+
+
+            #region resultprocessing
+            IEnumerable<MethodInfo> topPages;
+            IEnumerable<IGrouping<DateTime, MethodInfo>> hourlyHits = null;
+            long peakHits;
+            IEnumerable<IGrouping<DateTime, MethodInfo>> peakHourPages = null;
+
+            try
+            {
                 excelApp = new Application ();
                 excelApp.Visible = false;
                 reportSpreadsheet = excelApp.Workbooks.Add ();
                 excelApp.Calculation = XlCalculation.xlCalculationManual;
                 reportSheet = reportSpreadsheet.ActiveSheet;
-
-                Console.WriteLine ("{0} Calculating Concurrent User Count", stopWatch.Elapsed.ToString (@"hh\:mm\:ss"));
                 #region Concurrent Users
-                reportSheet.Name = "Concurrent Users";
-                reportSheet.Cells[reportRow, reportCol++] = "Timestamp";
-                reportSheet.Cells[reportRow, reportCol++] = "Requests";
-                reportSheet.Cells[reportRow, reportCol++] = "TPS";
-                reportSheet.Cells[reportRow, reportCol++] = "Average Response Time";
-                reportSheet.Cells[reportRow, reportCol++] = "Concurrent Users (based on Little's Law)";
-                reportSheet.Cells[reportRow, reportCol++] = "Bytes Sent";
-                reportSheet.Cells[reportRow, reportCol++] = "Network Speed (Mbps)";
-
-
-                foreach ( var p in requests )
+                if ( requests.Any () )
                 {
-                    reportCol = 1; reportRow++;
-                    reportSheet.Cells[reportRow, reportCol++] = p.TimeStamp;
-                    reportSheet.Cells[reportRow, reportCol++] = p.Transactions;
-                    reportSheet.Cells[reportRow, reportCol++] = p.Tps;
-                    reportSheet.Cells[reportRow, reportCol++] = p.AverageResponseTime;
-                    reportSheet.Cells[reportRow, reportCol++] = p.ConcurrentUsers;
-                    reportSheet.Cells[reportRow, reportCol++] = p.BytesSent;
-                    reportSheet.Cells[reportRow, reportCol++] = p.NetworkSpeed;
+                    Console.WriteLine ("{0} Calculating Concurrent User Count", stopWatch.Elapsed.ToString (@"hh\:mm\:ss"));
+
+                    reportSheet.Name = "Concurrent Users";
+                    reportSheet.Cells[reportRow, reportCol++] = "Timestamp";
+                    reportSheet.Cells[reportRow, reportCol++] = "Requests";
+                    reportSheet.Cells[reportRow, reportCol++] = "TPS";
+                    reportSheet.Cells[reportRow, reportCol++] = "Average Response Time";
+                    reportSheet.Cells[reportRow, reportCol++] = "Concurrent Users (based on Little's Law)";
+                    reportSheet.Cells[reportRow, reportCol++] = "Bytes Sent";
+                    reportSheet.Cells[reportRow, reportCol++] = "Network Speed (Mbps)";
+
+
+                    foreach ( var p in requests )
+                    {
+                        reportCol = 1; reportRow++;
+                        reportSheet.Cells[reportRow, reportCol++] = p.TimeStamp;
+                        reportSheet.Cells[reportRow, reportCol++] = p.Transactions;
+                        reportSheet.Cells[reportRow, reportCol++] = p.Tps;
+                        reportSheet.Cells[reportRow, reportCol++] = p.AverageResponseTime;
+                        reportSheet.Cells[reportRow, reportCol++] = p.ConcurrentUsers;
+                        reportSheet.Cells[reportRow, reportCol++] = p.BytesSent;
+                        reportSheet.Cells[reportRow, reportCol++] = p.NetworkSpeed;
+                    }
                 }
+                #endregion
 
                 reportSpreadsheet.Application.DisplayAlerts = false;
                 reportSpreadsheet.SaveAs (exportFileName, ConflictResolution: XlSaveConflictResolution.xlLocalSessionChanges);
 
-                #endregion
-
-
-
-                reportSpreadsheet.Save ();
-
                 #region Page visit Summary
-                Console.WriteLine ("{0} Genrating Page visit Summary", stopWatch.Elapsed.ToString (@"hh\:mm\:ss"));
-                reportSheet = reportSpreadsheet.Worksheets.Add (Type.Missing, reportSheet, 1);
-                reportSheet.Name = "Page visit Summary";
-
-
-                startRow = startCol = 1;
-
-                startRow = CollectionToTable (pageViewsForPeriod.Values, startRow, startCol, "Page visit Summary (for the period)");
-
-
-                reportSheet.Shapes.AddChart (XlChartType.xlLine).Select ();
-                excelApp.ActiveChart.SetSourceData (Source: reportSheet.get_Range ("A1:B" + startRow));
-
-                reportSheet.Shapes.AddChart (XlChartType.xlPie).Select ();
-                excelApp.ActiveChart.SetSourceData (Source: reportSheet.get_Range ("A1:B" + startRow));
-                excelApp.ActiveChart.ClearToMatchStyle ();
-                try
+                if ( pageViewsForPeriod.Any () )
                 {
-                    excelApp.ActiveChart.ChartStyle = 256;
-                }
-                catch ( Exception e )
-                { }
+                    Console.WriteLine ("{0} Genrating Page visit Summary", stopWatch.Elapsed.ToString (@"hh\:mm\:ss"));
+                    reportSheet = reportSpreadsheet.Worksheets.Add (Type.Missing, reportSheet, 1);
+                    reportSheet.Name = "Page visit Summary";
 
-                excelApp.ActiveChart.SetElement (Microsoft.Office.Core.MsoChartElementType.msoElementChartTitleAboveChart);
-                excelApp.ActiveChart.ChartTitle.Text = "Page visit Summary (for the period) Most Visited Pages";
 
-                reportSheet.Shapes.AddChart (XlChartType.xlBarClustered).Select ();
-                excelApp.ActiveChart.SetSourceData (Source: reportSheet.get_Range ("A1:D" + startRow));
-                excelApp.ActiveChart.ClearToMatchStyle ();
-                try
-                {
-                    excelApp.ActiveChart.ChartStyle = 222;
+                    startRow = startCol = 1;
+
+                    startRow = CollectionToTable (pageViewsForPeriod.Values, startRow, startCol, "Page visit Summary (for the period)");
+
+
+                    reportSheet.Shapes.AddChart (XlChartType.xlLine).Select ();
+                    excelApp.ActiveChart.SetSourceData (Source: reportSheet.get_Range ("A1:B" + startRow));
+
+                    reportSheet.Shapes.AddChart (XlChartType.xlPie).Select ();
+                    excelApp.ActiveChart.SetSourceData (Source: reportSheet.get_Range ("A1:B" + startRow));
+                    excelApp.ActiveChart.ClearToMatchStyle ();
+                    try
+                    {
+                        excelApp.ActiveChart.ChartStyle = 256;
+                    }
+                    catch ( Exception e )
+                    { }
+
+                    excelApp.ActiveChart.SetElement (Microsoft.Office.Core.MsoChartElementType.msoElementChartTitleAboveChart);
+                    excelApp.ActiveChart.ChartTitle.Text = "Page visit Summary (for the period) Most Visited Pages";
+
+                    reportSheet.Shapes.AddChart (XlChartType.xlBarClustered).Select ();
+                    excelApp.ActiveChart.SetSourceData (Source: reportSheet.get_Range ("A1:D" + startRow));
+                    excelApp.ActiveChart.ClearToMatchStyle ();
+                    try
+                    {
+                        excelApp.ActiveChart.ChartStyle = 222;
+                    }
+                    catch ( Exception e )
+                    { }
+                    excelApp.ActiveChart.SetElement (Microsoft.Office.Core.MsoChartElementType.msoElementChartTitleAboveChart);
+                    excelApp.ActiveChart.ChartTitle.Text = "Page visit Summary (for the period) Average Response Time";
+                    SpreadCharts (reportSheet);
+
                 }
-                catch ( Exception e )
-                { }
-                excelApp.ActiveChart.SetElement (Microsoft.Office.Core.MsoChartElementType.msoElementChartTitleAboveChart);
-                excelApp.ActiveChart.ChartTitle.Text = "Page visit Summary (for the period) Average Response Time";
-                SpreadCharts (reportSheet);
                 #endregion
 
                 #region Daily Analysis
-                Console.WriteLine ("{0} Genrating Daily Statistics", stopWatch.Elapsed.ToString (@"hh\:mm\:ss"));
-                reportSheet = reportSpreadsheet.Worksheets.Add (Type.Missing, reportSheet, 1);
-                reportSheet.Name = "Daily Analysis";
-
-                foreach ( var d in dailyPages.Select (p => p.Timestamp).Distinct () )
+                if ( dailyPages.Any () )
                 {
-                    filteredEntries.UnionWith (dailyPages.Where (p => p.Timestamp == d.Date)
-                                                                .OrderByDescending (p => p.Hits).Take (topPagesPerDay));
-                    //Debug.WriteLine("Date: {0} - {1}", date, MethodInfo.TotalHits(dailyPages.Where(p => p.Timestamp == d.Date)));
+                    Console.WriteLine ("{0} Genrating Daily Statistics", stopWatch.Elapsed.ToString (@"hh\:mm\:ss"));
+                    reportSheet = reportSpreadsheet.Worksheets.Add (Type.Missing, reportSheet, 1);
+                    reportSheet.Name = "Daily Analysis";
+
+                    foreach ( var d in dailyPages.Select (p => p.Timestamp).Distinct () )
+                    {
+                        filteredEntries.UnionWith (dailyPages.Where (p => p.Timestamp == d.Date)
+                                                                    .OrderByDescending (p => p.Hits).Take (topPagesPerDay));
+                        //Debug.WriteLine("Date: {0} - {1}", date, MethodInfo.TotalHits(dailyPages.Where(p => p.Timestamp == d.Date)));
+                    }
+
+                    topPages = filteredEntries.Where (p => filteredEntries.Count (q => q.Url == p.Url) > totalDays / 2);
+                    startRow = startCol = 1;
+                    AddChartFromSeries (startRow, startCol, "Daily Top Pages - Visits Trend", topPages, p => p.Hits, d => d.ToString (DateTimeFormatInfo.CurrentInfo.ShortDatePattern));
+
+                    startRow = reportRow + 10;
+                    startCol = 1;
+                    AddChartFromSeries (startRow, startCol, "Daily Top Pages - Response Time(Average) Trend", topPages, p => p.AvgResponseTime, d => d.ToString (DateTimeFormatInfo.CurrentInfo.ShortDatePattern));
+
+
+                    startRow = reportRow + 10;
+                    startCol = 1;
+                    AddChartFromSeries (startRow, startCol, "Daily Top Pages - Response Time(90%tile) Trend", topPages, p => p.NinetiethPercentile, d => d.ToString (DateTimeFormatInfo.CurrentInfo.ShortDatePattern));
+
+                    startRow = 1;
+                    startCol = 30;
+                    filteredEntries.Clear ();
+
+                    //reportSheet.Cells[reportRow, reportCol] = "Date";
+                    foreach ( var d in dailyPages.Select (p => p.Timestamp).Distinct () )
+                    {
+                        filteredEntries.UnionWith (dailyPages.Where (p => p.Timestamp == d.Date)
+                                               .OrderByDescending (p => p.NinetiethPercentile).Take (topPagesPerDay));
+                    }
+                    topPages = filteredEntries.Where (p => filteredEntries.Count (q => q.Url == p.Url) > totalDays / 2);
+                    AddChartFromSeries (startRow, startCol, "Daily Slow Pages - Response Time(90%tile) Trend", topPages, p => p.NinetiethPercentile, d => d.ToString (DateTimeFormatInfo.CurrentInfo.ShortDatePattern));
+
+
+                    startRow = reportRow + 10;
+                    startCol = 30;
+                    filteredEntries.Clear ();
+
+                    //reportSheet.Cells[reportRow, reportCol] = "Date";
+                    foreach ( var d in dailyPages.Select (p => p.Timestamp).Distinct () )
+                    {
+                        filteredEntries.UnionWith (dailyPages.Where (p => p.Timestamp == d.Date)
+                                               .OrderByDescending (p => p.AvgResponseTime).Take (topPagesPerDay));
+                        //Debug.WriteLine("Date: {0} - {1}", date, MethodInfo.TotalHits(dailyPages.Where(p => p.Timestamp == d.Date)));
+                    }
+                    topPages = filteredEntries.Where (p => filteredEntries.Count (q => q.Url == p.Url) > totalDays / 2);
+                    AddChartFromSeries (startRow, startCol, "Daily Slow Pages - Response Time(Average) Trend", topPages, p => p.AvgResponseTime, d => d.ToString (DateTimeFormatInfo.CurrentInfo.ShortDatePattern));
+
+                    SpreadCharts (reportSheet);
                 }
-
-                var topPages = filteredEntries.Where (p => filteredEntries.Count (q => q.Url == p.Url) > totalDays / 2);
-                startRow = startCol = 1;
-                AddChartFromSeries (startRow, startCol, "Daily Top Pages - Visits Trend", topPages, p => p.Hits, d => d.ToString (DateTimeFormatInfo.CurrentInfo.ShortDatePattern));
-
-                startRow = reportRow + 10;
-                startCol = 1;
-                AddChartFromSeries (startRow, startCol, "Daily Top Pages - Response Time(Average) Trend", topPages, p => p.AvgResponseTime, d => d.ToString (DateTimeFormatInfo.CurrentInfo.ShortDatePattern));
-
-
-                startRow = reportRow + 10;
-                startCol = 1;
-                AddChartFromSeries (startRow, startCol, "Daily Top Pages - Response Time(90%tile) Trend", topPages, p => p.NinetiethPercentile, d => d.ToString (DateTimeFormatInfo.CurrentInfo.ShortDatePattern));
-
-                startRow = 1;
-                startCol = 30;
-                filteredEntries.Clear ();
-
-                //reportSheet.Cells[reportRow, reportCol] = "Date";
-                foreach ( var d in dailyPages.Select (p => p.Timestamp).Distinct () )
-                {
-                    filteredEntries.UnionWith (dailyPages.Where (p => p.Timestamp == d.Date)
-                                           .OrderByDescending (p => p.NinetiethPercentile).Take (topPagesPerDay));
-                }
-                topPages = filteredEntries.Where (p => filteredEntries.Count (q => q.Url == p.Url) > totalDays / 2);
-                AddChartFromSeries (startRow, startCol, "Daily Slow Pages - Response Time(90%tile) Trend", topPages, p => p.NinetiethPercentile, d => d.ToString (DateTimeFormatInfo.CurrentInfo.ShortDatePattern));
-
-
-                startRow = reportRow + 10;
-                startCol = 30;
-                filteredEntries.Clear ();
-
-                //reportSheet.Cells[reportRow, reportCol] = "Date";
-                foreach ( var d in dailyPages.Select (p => p.Timestamp).Distinct () )
-                {
-                    filteredEntries.UnionWith (dailyPages.Where (p => p.Timestamp == d.Date)
-                                           .OrderByDescending (p => p.AvgResponseTime).Take (topPagesPerDay));
-                    //Debug.WriteLine("Date: {0} - {1}", date, MethodInfo.TotalHits(dailyPages.Where(p => p.Timestamp == d.Date)));
-                }
-                topPages = filteredEntries.Where (p => filteredEntries.Count (q => q.Url == p.Url) > totalDays / 2);
-                AddChartFromSeries (startRow, startCol, "Daily Slow Pages - Response Time(Average) Trend", topPages, p => p.AvgResponseTime, d => d.ToString (DateTimeFormatInfo.CurrentInfo.ShortDatePattern));
-
-                SpreadCharts (reportSheet);
 
                 #endregion
 
                 #region Hourly analysis
-                Console.WriteLine ("{0} Genrating Hourly Statistics", stopWatch.Elapsed.ToString (@"hh\:mm\:ss"));
-                reportSheet = reportSpreadsheet.Worksheets.Add (Type.Missing, reportSheet, 1);
-                reportSheet.Name = "Hourly Analysis";
-
-                startRow = 1;
-                startCol = 1;
-                filteredEntries.Clear ();
-
-                foreach ( var d in hourlyPages.Select (p => p.Timestamp).Distinct () )
+                if ( hourlyPages.Any () )
                 {
-                    filteredEntries.UnionWith (hourlyPages.Where (p => p.Timestamp == d.Date.AddHours (d.Hour))
-                                        .OrderByDescending (p => p.Hits).Take (topPagesPerDay));
-                    //Debug.WriteLine("Date: {0} - {1}", date, MethodInfo.TotalHits(dailyPages.Where(p => p.Timestamp == d.Date)));
+                    Console.WriteLine ("{0} Genrating Hourly Statistics", stopWatch.Elapsed.ToString (@"hh\:mm\:ss"));
+                    reportSheet = reportSpreadsheet.Worksheets.Add (Type.Missing, reportSheet, 1);
+                    reportSheet.Name = "Hourly Analysis";
+
+                    startRow = 1;
+                    startCol = 1;
+                    filteredEntries.Clear ();
+
+                    foreach ( var d in hourlyPages.Select (p => p.Timestamp).Distinct () )
+                    {
+                        filteredEntries.UnionWith (hourlyPages.Where (p => p.Timestamp == d.Date.AddHours (d.Hour))
+                                            .OrderByDescending (p => p.Hits).Take (topPagesPerDay));
+                        //Debug.WriteLine("Date: {0} - {1}", date, MethodInfo.TotalHits(dailyPages.Where(p => p.Timestamp == d.Date)));
+                    }
+                    var totalHits = hourlyPages.Sum (p => p.Hits);
+                    //filter out top pages which are there for 10% of time or 2% traffic
+                    topPages = filteredEntries.Where (p => filteredEntries.Count (q => q.Url == p.Url) > totalHours / 10 || p.Hits > totalHits * 2 / 100);
+                    startRow += AddChartFromSeries (startRow, startCol, "Hourly Top Pages Summary (By Hits)", topPages, p => p.Hits, d => d.ToString ());
+                    excelApp.ActiveChart.Axes (XlAxisType.xlCategory).CategoryType = XlCategoryType.xlCategoryScale;
+
+                    hourlyHits = hourlyPages.GroupBy (p => p.Timestamp, q => q);
+                    peakHits = hourlyHits.Select (p => p.Sum (q => q.Hits)).OrderByDescending (p => p).Take (peakHoursCount).Min ();
+                    peakHourPages = hourlyHits.Where (p => p.Sum (q => q.Hits) >= peakHits);
+
+                    startRow += 10; startCol = 1;
+                    startRow += AddChartFromSeries (startRow, startCol, "Peak Hour Top Pages Summary (By Hits)", peakHourPages.SelectMany (g => g.Where (p => p.Hits > peakHits * 2 / 100)), p => p.Hits, d => d.ToString ());
+                    excelApp.ActiveChart.Axes (XlAxisType.xlCategory).CategoryType = XlCategoryType.xlCategoryScale;
+
+                    CollectionToTable (peakHourPages.SelectMany (g => g), startRow + 10, 1, "Peak Hour Pages", true);
+
+                    SpreadCharts (reportSheet);
                 }
-                var totalHits = hourlyPages.Sum (p => p.Hits);
-                //filter out top pages which are there for 10% of time or 2% traffic
-                topPages = filteredEntries.Where (p => filteredEntries.Count (q => q.Url == p.Url) > totalHours / 10 || p.Hits > totalHits * 2 / 100);
-                startRow += AddChartFromSeries (startRow, startCol, "Hourly Top Pages Summary (By Hits)", topPages, p => p.Hits, d => d.ToString ());
-                excelApp.ActiveChart.Axes (XlAxisType.xlCategory).CategoryType = XlCategoryType.xlCategoryScale;
-
-                var hourlyHits = hourlyPages.GroupBy (p => p.Timestamp, q => q);
-                var peakHits = hourlyHits.Select (p => p.Sum (q => q.Hits)).OrderByDescending (p => p).Take (peakHoursCount).Min ();
-                var peakHourPages = hourlyHits.Where (p => p.Sum (q => q.Hits) >= peakHits);
-
-                startRow += 10; startCol = 1;
-                startRow += AddChartFromSeries (startRow, startCol, "Peak Hour Top Pages Summary (By Hits)", peakHourPages.SelectMany (g => g.Where (p => p.Hits > peakHits * 2 / 100)), p => p.Hits, d => d.ToString ());
-                excelApp.ActiveChart.Axes (XlAxisType.xlCategory).CategoryType = XlCategoryType.xlCategoryScale;
-
-                CollectionToTable (peakHourPages.SelectMany (g => g), startRow + 10, 1, "Peak Hour Pages", true);
-
-                SpreadCharts (reportSheet);
-
                 #endregion
 
                 #region URL Param Hits Summary
-                reportSheet = reportSpreadsheet.Worksheets.Add (Type.Missing, reportSheet, 1);
-                startRow = startCol = 1;
-                reportSheet.Name = "URL Parameters";
-                CollectionToTable (pageViewsForPeriod.Values, startRow, startCol, "URL Parameters Summary (for the period)");
+                if ( hitsPerURLParams.Any () )
+                {
+                    Console.WriteLine ("{0} Genrating URL parameter statistics", stopWatch.Elapsed.ToString (@"hh\:mm\:ss"));
+
+                    reportSheet = reportSpreadsheet.Worksheets.Add (Type.Missing, reportSheet, 1);
+                    startRow = startCol = 1;
+                    reportSheet.Name = "URL Parameters";
+                    CollectionToTable (urlParamHits.Values, startRow, startCol, "URL Parameters Summary (for the period)");
+                }
                 #endregion
 
                 #region Summary
@@ -595,14 +631,20 @@ namespace AdysTech.IISLogAnalytics
                 reportSheet.Cells[reportRow, 1] = "Average Transactions/Sec";
                 reportSheet.Cells[reportRow++, 2] = requests.Average (p => p.Tps);
 
-                reportSheet.Cells[reportRow, 1] = "Average Transactions/Hour";
-                reportSheet.Cells[reportRow++, 2] = hourlyHits.Average (p => p.Sum (q => q.Hits));
+                if ( hourlyHits!=null )
+                {
+                    reportSheet.Cells[reportRow, 1] = "Average Transactions/Hour";
+                    reportSheet.Cells[reportRow++, 2] = hourlyHits.Average (p => p.Sum (q => q.Hits));
+                }
 
-                reportSheet.Cells[reportRow, 1] = "Peak Hour Transactions/Hour";
-                reportSheet.Cells[reportRow++, 2] = peakHourPages.Average (p => p.Sum (q => q.Hits));
+                if ( peakHourPages!=null )
+                {
+                    reportSheet.Cells[reportRow, 1] = "Peak Hour Transactions/Hour";
+                    reportSheet.Cells[reportRow++, 2] = peakHourPages.Average (p => p.Sum (q => q.Hits));
 
-                reportSheet.Cells[reportRow, 1] = "Peak Hour Transactions/Sec";
-                reportSheet.Cells[reportRow++, 2] = peakHourPages.Average (p => p.Sum (q => q.Hits) / 3600);
+                    reportSheet.Cells[reportRow, 1] = "Peak Hour Transactions/Sec";
+                    reportSheet.Cells[reportRow++, 2] = peakHourPages.Average (p => p.Sum (q => q.Hits) / 3600);
+                }
 
                 reportSheet.Cells[reportRow, 1] = "UniqueIPs";
                 reportSheet.Cells[reportRow++, 2] = uniqueIPs.Count;
@@ -647,7 +689,20 @@ namespace AdysTech.IISLogAnalytics
                 Console.WriteLine ("Done, Final time : {0}", stopWatch.Elapsed.ToString (@"hh\:mm\:ss"));
             }
             #endregion
+
             return 0;
+        }
+
+        private static Dictionary<string, int> ParseHeaderFields(string header)
+        {
+            var fields = header.Split (' ');
+            Dictionary<string, int> fieldIndex = new Dictionary<string, int> ();
+
+            for ( int i = 1; i < fields.Count (); i++ )
+            {
+                fieldIndex.Add (fields[i], i - 1);
+            }
+            return fieldIndex;
         }
 
         private static int CollectionToTable(IEnumerable<MethodInfo> collection, int reportRow, int reportCol, string Title, bool WithDateTime = false)
@@ -692,6 +747,8 @@ namespace AdysTech.IISLogAnalytics
             startRow += 2;
             reportRow = startRow;
             reportCol = startCol;
+
+            if ( !TopPages.Any () ) return reportRow - startRow;
 
             foreach ( var page in TopPages )
             {
